@@ -1,48 +1,64 @@
-import socket
-import threading
+import asyncio
 
+clients = {}
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # SOCK_Stream for TCP
-server.bind(("localhost", 5555))
-server.listen()
+async def broadcast(message, sender=None):
+    """Broadcast the message to all connected clients except the sender."""
+    for client, nickname in clients.items():
+        if nickname != sender:
+            client.write(message)
+            await client.drain()
 
-clients = dict()
-print("Server is listening...")
+async def handle_client(reader, writer):
+    """Handles a client connection."""
+    addr = writer.get_extra_info('peername')
+    print(f"New connection from {addr}")
 
+    # Request nickname
+    writer.write(b"NICK")
+    await writer.drain()
 
-def broadcast(message, sender=None):
-    """Sends a message to all connected clients except the sender."""
-    for client in clients:
-        if client != sender:
-            client.send(message)
+    data = await reader.read(100)
+    nickname = data.decode()
 
+    clients[writer] = nickname
+    broadcast_message = f"{nickname} joined the chat!".encode()
 
-def handle(client):
-    """Handles messages from a specific client."""
+    # Broadcast to all other clients
+    await broadcast(broadcast_message, nickname)
+
     while True:
         try:
-            message = client.recv(1024)
-            broadcast(message, client)
-        except:
-            nickname = clients.pop(client, None)
-            broadcast(f"{nickname} left the chat!".encode())
-            client.close()
+            # Receive message
+            data = await reader.read(1024)
+            if not data:
+                break
+
+            message = data.decode()
+            print(f"Received from {nickname}: {message}")
+
+            # Broadcast the message to others
+            message_to_send = f"{nickname}: {message}".encode()
+            await broadcast(message_to_send, nickname)
+
+        except Exception as e:
+            print(f"Error handling client {nickname}: {e}")
             break
 
+    # Remove client on disconnect
+    del clients[writer]
+    print(f"{nickname} disconnected.")
+    await broadcast(f"{nickname} left the chat!".encode(), nickname)
+    writer.close()
+    await writer.wait_closed()
 
-def receive():
-    """Accepts new clients and starts a thread for each one."""
-    while True:
-        client, _ = server.accept()     # server accepts connection here showing TCP conn
-        client.send("NICK".encode())
-        nickname = client.recv(1024).decode()
+async def main():
+    """Main entry point for server."""
+    server = await asyncio.start_server(handle_client, 'localhost', 5556)
+    addr = server.sockets[0].getsockname()
+    print(f'Serving on {addr}')
+    async with server:
+        await server.serve_forever()
 
-        clients[client] = nickname
-        broadcast(f"{nickname} joined the chat!".encode())
-        print(f"{nickname} connected!")
-
-        threading.Thread(target=handle, args=(client,)).start()
-
-
-# Start receiving clients
-receive()
+if __name__ == '__main__':
+    asyncio.run(main())

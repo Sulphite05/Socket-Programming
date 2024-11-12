@@ -1,34 +1,38 @@
-import socket
-import threading
+import asyncio
 
 
-nickname = input("Choose a nickname: ")
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(("localhost", 5555))
-
-
-def receive():
-    """Receives messages from the server."""
+async def receive_messages(reader):
+    """Receive and print messages from the server."""
     while True:
-        try:
-            message = client.recv(1024).decode()
-            if message == "NICK":
-                client.send(nickname.encode())
-            else:
-                print(message)
-        except:
-            print("Disconnected from the server!")
-            client.close()
-            break
+        data = await reader.read(1024)
+        if data:
+            print(data.decode())
 
 
-def write():
-    """Takes input from the user and sends it to the server."""
+async def send_message(writer, message):
+    """Send a message to the server."""
+    writer.write(message.encode())
+    await writer.drain()
+
+
+async def main():
+    nickname = input("Choose a nickname: ")
+
+    reader, writer = await asyncio.open_connection('localhost', 5556)
+
+    # Wait for the NICK prompt from the server
+    data = await reader.read(100)
+    if data == b'NICK':
+        writer.write(nickname.encode())
+        await writer.drain()
+
+    # Start receiving messages
+    asyncio.create_task(receive_messages(reader))
+
     while True:
-        message = f"{nickname}: {input()}"
-        client.send(message.encode())
+        message = input(f"{nickname}: ")
+        await send_message(writer, message)
 
 
-# Start threads for receiving and writing messages
-threading.Thread(target=receive).start()
-threading.Thread(target=write).start()
+if __name__ == '__main__':
+    asyncio.run(main())
